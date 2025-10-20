@@ -45,3 +45,6 @@ pnpm-lock.yaml
 # --- 쿠버네티스/클러스터 로컬 파일(레포에 넣지 말 것)---
 *.kubeconfig
 .kube/
+
+# 그 이외
+private/
