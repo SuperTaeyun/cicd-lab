@@ -82,7 +82,7 @@ jobs:
           kubectl auth can-i create namespaces --all-namespaces
 
       - name: Create namespace (idempotent)
-        run: kubectl apply -f k8s/namespace.yaml
+        run: kubectl get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${K8S_NAMESPACE}
 
       - name: Inject ECR image URI into manifest
         run: |
