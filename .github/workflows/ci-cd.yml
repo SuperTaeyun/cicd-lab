@@ -77,9 +77,9 @@ jobs:
           kubectl config view --minify
           kubectl auth can-i create namespaces --all-namespaces || true
 
-      - name: Can I create namespaces?
-        run: |
-          kubectl auth can-i create namespaces --all-namespaces
+      # - name: Can I create namespaces?
+      #   run: |
+      #     kubectl auth can-i create namespaces --all-namespaces
 
       - name: Create namespace (idempotent)
         run: kubectl get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${K8S_NAMESPACE}
