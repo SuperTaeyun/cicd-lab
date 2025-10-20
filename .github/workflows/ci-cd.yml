@@ -1,0 +1,83 @@
+name: CI-CD to EKS
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-2
+  EKS_CLUSTER_NAME: demo-eks
+  ECR_REPOSITORY: demo-app
+  K8S_NAMESPACE: demo
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS (OIDC AssumeRole)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push Docker Image
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
+          IMAGE_TAG=${GITHUB_SHA::7}
+          docker build -t ${ECR_URI}:${IMAGE_TAG} -t ${ECR_URI}:latest .
+          docker push ${ECR_URI}:${IMAGE_TAG}
+          docker push ${ECR_URI}:latest
+          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS (OIDC AssumeRole)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION}
+
+      - name: Create namespace (idempotent)
+        run: kubectl apply -f k8s/namespace.yaml
+
+      - name: Inject ECR image URI into manifest
+        run: |
+          sed -i "s|851725405727.dkr.ecr.ap-northeast-2.amazonaws.com/demo-app|${ECR_URI}|g" k8s/deployment.yaml
+
+      - name: Apply manifests
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+
+      - name: Rollout status
+        run: |
+          kubectl rollout status deployment/demo-app -n ${K8S_NAMESPACE}
+
+      - name: Set new image (by tag) & wait
+        run: |
+          kubectl set image deployment/demo-app demo-app=${ECR_URI}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
+          kubectl rollout status deployment/demo-app -n ${K8S_NAMESPACE}
