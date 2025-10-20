@@ -5,6 +5,10 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 env:
   AWS_REGION: ap-northeast-2
   EKS_CLUSTER_NAME: demo-eks
@@ -14,9 +18,6 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write # OIDC
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,6 +27,9 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Who am I (for debug)
+        run: aws sts get-caller-identity
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -41,63 +45,17 @@ jobs:
           echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS (OIDC AssumeRole)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Who am I?
-        run: |
-          aws sts get-caller-identity
-          aws sts get-caller-identity --query Arn --output text
-
       - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION}
+
+      - name: Ensure namespace exists (idempotent)
         run: |
-          aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION}
-          kubectl config current-context
-          kubectl cluster-info
+          kubectl get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${K8S_NAMESPACE}
 
-      - name: Debug kube auth
-        run: |
-          set -x
-          aws sts get-caller-identity
-          aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION}
-          kubectl config current-context
-          kubectl config view --minify
-          kubectl auth can-i create namespaces --all-namespaces || true
-
-      # - name: Can I create namespaces?
-      #   run: |
-      #     kubectl auth can-i create namespaces --all-namespaces
-
-      - name: Create namespace (idempotent)
-        run: kubectl get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${K8S_NAMESPACE}
-
-      - name: Inject ECR image URI into manifest
+      - name: Set image & apply
         run: |
           sed -i "s|851725405727.dkr.ecr.ap-northeast-2.amazonaws.com/demo-app|${ECR_URI}|g" k8s/deployment.yaml
-
-      - name: Apply manifests
-        run: |
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
-
-      - name: Rollout status
-        run: |
-          kubectl rollout status deployment/demo-app -n ${K8S_NAMESPACE}
-
-      - name: Set new image (by tag) & wait
-        run: |
           kubectl set image deployment/demo-app demo-app=${ECR_URI}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
           kubectl rollout status deployment/demo-app -n ${K8S_NAMESPACE}
