@@ -57,6 +57,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Who am I?
+        run: |
+          aws sts get-caller-identity
+          aws sts get-caller-identity --query Arn --output text
+
       - name: Update kubeconfig
         run: |
           aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${AWS_REGION}
